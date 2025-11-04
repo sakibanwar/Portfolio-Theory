@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Portfolio Theory</title>
+    <!-- Load Plotly.js (updated to a specific, recent version) -->
+    <script src="https://cdn.plot.ly/plotly-2.33.0.min.js"></script>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-100 p-4 md:p-8">
+
+    <div class="max-w-6xl mx-auto bg-white p-6 md:p-8 rounded-xl shadow-lg">
+        
+        <h1 class="text-3xl font-bold text-gray-900 mb-6 text-center">Interactive Portfolio Theory</h1>
+
+        <!-- Shared Slider Control -->
+        <div class="mb-8 p-6 bg-gray-50 rounded-lg shadow-inner">
+            <label for="gammaSlider" class="block text-xl font-medium text-gray-700 mb-3 text-center">
+                Investor Risk Aversion ($\gamma$): <span id="gammaValue" class="font-bold text-blue-600">3.5</span>
+            </label>
+            <input type="range" id="gammaSlider" min="1.0" max="10.0" value="3.5" step="0.1"
+                   class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer">
+        </div>
+
+        <!-- Plot 1: Risky-Only World -->
+        <div class="mb-12">
+            <h2 class="text-2xl font-semibold text-gray-800 mb-4">Plot 1: Optimal Choice (Risky Assets Only)</h2>
+            <p class="text-gray-600 mb-4">
+                In this world, the curved <strong class="text-blue-600">Efficient Frontier</strong> is the "budget line." 
+                The investor's optimal portfolio (red dot) is where their personal indifference curve (red dashes) 
+                is tangent to this frontier.
+            </p>
+            <div id="plot1" class="w-full h-[500px] border border-gray-200 rounded-lg"></div>
+        </div>
+
+        <!-- Plot 2: World with Risk-Free Asset -->
+        <div>
+            <h2 class="text-2xl font-semibold text-gray-800 mb-4">Plot 2: Optimal Choice with a Risk-Free Asset (CML)</h2>
+            <p class="text-gray-600 mb-4">
+                Here, the straight <strong class="text-blue-600">Capital Market Line (CML)</strong> becomes the new, superior "budget line."
+                All investors desire the same <strong class="text-green-600">Tangency Portfolio (T)</strong>. 
+                Their final choice (red dot) is on the CML, based on their risk aversion.
+            </p>
+            <div id="plot2" class="w-full h-[500px] border border-gray-200 rounded-lg"></div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- GLOBAL SETTINGS ---
+        const ASSET_A = { mean: 0.08, stdev: 0.12 };
+        const ASSET_B = { mean: 0.15, stdev: 0.25 };
+        const CORRELATION = 0.1;
+        const RF_RATE = 0.03;
+        const plotLayout = {
+            xaxis: { title: 'Risk (Standard Deviation, $\sigma$)', range: [0, 0.4], zeroline: false, gridcolor: '#eee' },
+            yaxis: { title: 'Expected Return, $E[r]$', range: [0, 0.25], zeroline: false, gridcolor: '#eee' },
+            legend: { x: 0.01, y: 0.98, bgcolor: 'rgba(255,255,255,0.8)', bordercolor: '#ccc', borderwidth: 1 },
+            hovermode: 'closest',
+            aspectratio: { x: 1, y: 1 } // Maintain square aspect ratio
+        };
+
+        // --- DATA GENERATION FUNCTIONS ---
+
+        /**
+         * Generates all (sigma, E[r]) pairs for the 2-asset frontier
+         */
+        function generateFrontierData() {
+            let points = [];
+            for (let i = -50; i <= 150; i++) { // Loop from wA = -0.5 to 1.5
+                let wA = i / 100.0;
+                let wB = 1.0 - wA;
+                
+                let er = wA * ASSET_A.mean + wB * ASSET_B.mean;
+                let variance = (wA**2 * ASSET_A.stdev**2) + (wB**2 * ASSET_B.stdev**2) + 
+                             (2 * wA * wB * CORRELATION * ASSET_A.stdev * ASSET_B.stdev);
+                let stdev = Math.sqrt(variance);
+                
+                points.push({ wA: wA, er: er, stdev: stdev });
+            }
+            return points;
+        }
+
+        /**
+         * Finds the Minimum Variance Portfolio (MVP)
+         */
+        function findMVP(frontierData) {
+            return frontierData.reduce((min, p) => p.stdev < min.stdev ? p : min, frontierData[0]);
+        }
+        
+        /**
+         * Finds the Tangency Portfolio (T) for the CML
+         */
+        function findTangencyPortfolio(efficientFrontier) {
+            let maxSR = -Infinity;
+            let tangencyPortfolio = null;
+
+            efficientFrontier.forEach(p => {
+                let sr = (p.er - RF_RATE) / p.stdev;
+                if (sr > maxSR) {
+                    maxSR = sr;
+                    tangencyPortfolio = p;
+                }
+            });
+            tangencyPortfolio.sharpeRatio = maxSR;
+            return tangencyPortfolio;
+        }
+        
+        /**
+         * Generates (x, y) points for an indifference curve
+         */
+        function getIndifferenceCurve(utility, gamma) {
+            let sigmas = [];
+            let ers = [];
+            for (let s = 0; s <= 0.4; s += 0.01) {
+                sigmas.push(s);
+                // E[r] = U + 0.5 * gamma * sigma^2
+                ers.push(utility + 0.5 * gamma * s**2);
+            }
+            return { x: sigmas, y: ers };
+        }
+
+        // --- PLOT 1: RISKY-ONLY ---
+
+        let frontierData = generateFrontierData();
+        let mvp = findMVP(frontierData);
+        let efficientFrontier = frontierData.filter(p => p.er >= mvp.er);
+        let inefficientFrontier = frontierData.filter(p => p.er < mvp.er);
+        
+        // Traces for Plot 1
+        const traceEfficient = {
+            x: efficientFrontier.map(p => p.stdev),
+            y: efficientFrontier.map(p => p.er),
+            mode: 'lines',
+            type: 'scatter',
+            name: 'Efficient Frontier',
+            line: { color: 'blue', width: 3 }
+        };
+        const traceInefficient = {
+            x: inefficientFrontier.map(p => p.stdev),
+            y: inefficientFrontier.map(p => p.er),
+            mode: 'lines',
+            type: 'scatter',
+            name: 'Inefficient Frontier',
+            line: { color: 'gray', dash: 'dash', width: 2 }
+        };
+
+        function initializePlot1() {
+            Plotly.newPlot('plot1', [traceEfficient, traceInefficient], 
+                {...plotLayout, title: 'Plot 1: Risky-Only World'});
+        }
+
+        function updatePlot1(gamma) {
+            // Find optimal risky portfolio by maximizing utility
+            let maxUtility = -Infinity;
+            let optimalRiskyP = null;
+            
+            efficientFrontier.forEach(p => {
+                let utility = p.er - 0.5 * gamma * p.stdev**2;
+                if (utility > maxUtility) {
+                    maxUtility = utility;
+                    optimalRiskyP = p;
+                }
+            });
+            
+            // Get the optimal indifference curve
+            let optimalIC = getIndifferenceCurve(maxUtility, gamma);
+            
+            const traceOptimalRiskyP = {
+                x: [optimalRiskyP.stdev],
+                y: [optimalRiskyP.er],
+                mode: 'markers',
+                type: 'scatter',
+                name: 'Optimal Risky P*',
+                marker: { color: 'red', size: 12, symbol: 'circle' }
+            };
+            
+            const traceOptimalIC = {
+                x: optimalIC.x,
+                y: optimalIC.y,
+                mode: 'lines',
+                type: 'scatter',
+                name: `Indifference Curve (U*)`,
+                line: { color: 'red', dash: 'dash', width: 2 }
+            };
+
+            // Use Plotly.react to update existing plot
+            Plotly.react('plot1', [traceEfficient, traceInefficient, traceOptimalRiskyP, traceOptimalIC], 
+                {...plotLayout, title: 'Plot 1: Risky-Only World'});
+        }
+
+        // --- PLOT 2: CML ---
+
+        let tangencyPortfolio = findTangencyPortfolio(efficientFrontier);
+        
+        // Traces for Plot 2
+        const traceCML = {
+            x: [0, tangencyPortfolio.stdev, 0.4],
+            y: [RF_RATE, tangencyPortfolio.er, RF_RATE + 0.4 * tangencyPortfolio.sharpeRatio],
+            mode: 'lines',
+            type: 'scatter',
+            name: 'Capital Market Line (CML)',
+            line: { color: 'blue', width: 3 }
+        };
+        const traceOldFrontier = {
+            x: efficientFrontier.map(p => p.stdev),
+            y: efficientFrontier.map(p => p.er),
+            mode: 'lines',
+            type: 'scatter',
+            name: 'Old Frontier',
+            line: { color: 'gray', dash: 'dash', width: 2 }
+        };
+        const traceTangencyT = {
+            x: [tangencyPortfolio.stdev],
+            y: [tangencyPortfolio.er],
+            mode: 'markers',
+            type: 'scatter',
+            name: 'Tangency Portfolio (T)',
+            marker: { color: 'green', size: 12, symbol: 'diamond' }
+        };
+        const traceRf = {
+            x: [0],
+            y: [RF_RATE],
+            mode: 'markers',
+            type: 'scatter',
+            name: 'Risk-Free Asset (Rf)',
+            marker: { color: 'black', size: 10, symbol: 'square' }
+        };
+
+        function initializePlot2() {
+            Plotly.newPlot('plot2', [traceCML, traceOldFrontier, traceTangencyT, traceRf], 
+                {...plotLayout, title: 'Plot 2: CML & Risk-Free Asset'});
+        }
+
+        function updatePlot2(gamma) {
+            // Find optimal portfolio P* on the CML
+            // sigma_p = SR_max / gamma
+            let optimalSigma = tangencyPortfolio.sharpeRatio / gamma;
+            if (optimalSigma > 0.4) optimalSigma = 0.4; // Cap at plot edge
+            
+            // E[r_p] = rf + sigma_p * SR_max
+            let optimalEr = RF_RATE + optimalSigma * tangencyPortfolio.sharpeRatio;
+            
+            // Calculate utility for this point
+            let optimalUtility = optimalEr - 0.5 * gamma * optimalSigma**2;
+            
+            // Get the optimal indifference curve
+            let optimalIC = getIndifferenceCurve(optimalUtility, gamma);
+            
+            const traceOptimalP = {
+                x: [optimalSigma],
+                y: [optimalEr],
+                mode: 'markers',
+                type: 'scatter',
+                name: 'Optimal Portfolio P*',
+                marker: { color: 'red', size: 12, symbol: 'circle' }
+            };
+            
+            const traceOptimalIC = {
+                x: optimalIC.x,
+                y: optimalIC.y,
+                mode: 'lines',
+                type: 'scatter',
+                name: `Indifference Curve (U*)`,
+                line: { color: 'red', dash: 'dash', width: 2 }
+            };
+
+            Plotly.react('plot2', [traceCML, traceOldFrontier, traceTangencyT, traceRf, traceOptimalP, traceOptimalIC], 
+                {...plotLayout, title: 'Plot 2: CML & Risk-Free Asset'});
+        }
+
+
+        // --- INITIALIZATION & EVENT LISTENERS ---
+        const slider = document.getElementById('gammaSlider');
+        const sliderValue = document.getElementById('gammaValue');
+
+        function runUpdates() {
+            let gamma = parseFloat(slider.value);
+            sliderValue.textContent = gamma.toFixed(1);
+            
+            // Update both plots
+            updatePlot1(gamma);
+            updatePlot2(gamma);
+        }
+        
+        // Add event listener
+        slider.addEventListener('input', runUpdates);
+        
+        // Initial page load
+        initializePlot1();
+        initializePlot2();
+        runUpdates(); // Run once to draw the optimal points
+
+    </script>
+
+</body>
+</html>
+
